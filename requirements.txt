@@ -14,8 +14,8 @@ matplotlib>=3.7.0
 
 # Emotion detection - Hume AI WebSocket API
 python-dotenv>=1.0.0
-hume>=0.7.0
-websockets>=12.0
+hume==0.13.13
+websockets==11.0.3
 
 # Image processing
 Pillow>=10.0.0
