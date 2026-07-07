@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 # Load environment variables from .env file
 try:
@@ -32,7 +33,7 @@ webrtc_streamer = None
 av = None
 cv2 = None
 analyze_frame = None
-
+get_last_detection_error = None
 _dependency_errors: List[Tuple[str, str]] = []
 
 try:
@@ -59,14 +60,25 @@ except (ImportError, OSError) as exc:
     cv2 = None
 
 try:
-    from emotion_detector import analyze_frame as _analyze_frame
+    import importlib
+    import emotion_detector
 
-    analyze_frame = _analyze_frame
-except (ImportError, OSError, Exception) as exc:  # noqa: BLE001 - expose exact failure to the UI
+    emotion_detector = importlib.reload(emotion_detector)
+    analyze_frame = emotion_detector.analyze_frame
+    get_last_detection_error = emotion_detector.get_last_detection_error
+except (ImportError, OSError, AttributeError) as exc:
     # OSError catches libGL.so.1 and other system library errors
     # This is common on Streamlit Cloud where system libraries are limited
     _dependency_errors.append(("emotion_detector", str(exc)))
     analyze_frame = None
+    get_last_detection_error = None
+
+try:
+    from emotion_behavior.core import detect_behavior_from_source, BEHAVIOR_TO_EMOTION
+except Exception as exc:
+    _dependency_errors.append(("emotion_behavior", str(exc)))
+    detect_behavior_from_source = None
+    BEHAVIOR_TO_EMOTION = {}
 
 
 st.set_page_config(page_title="Music Therapy Recommender", layout="wide")
@@ -94,8 +106,14 @@ def normalize_emotion(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
     normalized = str(value).strip().lower()
+    aliases = {
+        "neutral": "calm",
+        "relaxed": "calm",
+        "surprise": "surprised",
+    }
+    normalized = aliases.get(normalized, normalized)
     if normalized not in MOOD_OPTIONS:
-        return "neutral"
+        return None
     return normalized
 
 THEMES: Dict[str, Dict[str, str]] = {
@@ -1250,9 +1268,17 @@ def render_new_session(profile: Dict[str, Any]) -> None:
             if not detector_available:
                 st.error(
                     "⚠️ Emotion detection is currently unavailable. "
-                    "This is common on Streamlit Cloud due to system library limitations. "
-                    "Please use **Manual Input** mode instead, or try deploying to a platform with full system access."
+                    "Please use **Manual Input** mode instead."
                 )
+                emotion_errors = [
+                    message for name, message in _dependency_errors if name == "emotion_detector"
+                ]
+                if emotion_errors:
+                    st.warning(f"Import error: `{emotion_errors[-1]}`")
+                elif _dependency_errors:
+                    with st.expander("Show dependency diagnostics"):
+                        for name, message in _dependency_errors:
+                            st.markdown(f"- `{name}`: {message}")
                 st.info(
                     "💡 **Tip**: The manual mood input feature works perfectly and provides the same playlist recommendations!"
                 )
@@ -1283,19 +1309,31 @@ def render_new_session(profile: Dict[str, Any]) -> None:
                         frame_bgr = frame_rgb[:, :, ::-1]
                         
                         with st.spinner("🔍 Analyzing emotion... (this may take a few seconds)"):
-                            emotion = normalize_emotion(analyze_frame(frame_bgr))
+                            raw_emotion = analyze_frame(frame_bgr)
+                            emotion = normalize_emotion(raw_emotion)
                         
                         # Mark this snapshot as processed
                         st.session_state["_last_snapshot_key"] = current_snapshot_key
                         
                         if emotion:
                             st.session_state["last_detected_emotion"] = emotion
+                            st.session_state["detected_mood"] = emotion
                             st.session_state["_last_detected_tick"] = (
                                 st.session_state.get("_last_detected_tick", 0) + 1
                             )
                             st.success(f"✅ Detected: **{emotion.title()}**")
                         else:
-                            st.warning("⚠️ Couldn't determine the mood from that snapshot. Try another capture.")
+                            st.session_state["last_detected_emotion"] = None
+                            st.session_state["detected_mood"] = None
+                            detail = (
+                                get_last_detection_error()
+                                if get_last_detection_error is not None
+                                else None
+                            )
+                            if detail:
+                                st.error(f"⚠️ Emotion detection failed: {detail}")
+                            else:
+                                st.warning("⚠️ Couldn't determine the mood from that snapshot. Try another capture.")
                     except Exception as exc:  # noqa: BLE001 - show friendly error
                         st.error(f"Snapshot processing failed: {exc}")
 
@@ -1345,6 +1383,135 @@ def render_new_session(profile: Dict[str, Any]) -> None:
                 st.session_state.pop("current_to", None)
                 st.session_state["current_transition_step"] = 0
                 st.success(f"✅ Using {normalized_last.title()} as starting mood!")
+
+    with st.expander("📹 Image Emotion + CCTV Behavior Analysis", expanded=False):
+        st.caption(
+            "Upload a face image for emotion detection, or upload/stream a monitored video clip for pretrained behavior analysis."
+        )
+
+        emotion_upload = st.file_uploader(
+            "Upload an image for emotion detection",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="emotion_image_upload",
+        )
+        if emotion_upload is not None:
+            if st.button("Analyze uploaded image", key="analyze_uploaded_image"):
+                try:
+                    image = Image.open(emotion_upload).convert("RGB")
+                    frame_bgr = np.array(image)[:, :, ::-1]
+                    with st.spinner("Analyzing uploaded image..."):
+                        emotion_result = analyze_frame(frame_bgr) if analyze_frame else None
+                    if emotion_result:
+                        st.success(f"Emotion: {normalize_emotion(emotion_result).title() if normalize_emotion(emotion_result) else emotion_result}")
+                        st.session_state["last_detected_emotion"] = normalize_emotion(emotion_result) or emotion_result
+                        st.session_state["detected_mood"] = normalize_emotion(emotion_result) or emotion_result
+                    else:
+                        st.warning("No emotion could be detected from that image.")
+                except Exception as exc:
+                    st.error(f"Image analysis failed: {exc}")
+
+        behavior_mode = st.radio(
+            "Behavior source",
+            ["Uploaded video", "CCTV / stream URL"],
+            horizontal=True,
+            key="behavior_source_mode",
+        )
+
+        if behavior_mode == "Uploaded video":
+            behavior_upload = st.file_uploader(
+                "Upload a CCTV or video clip",
+                type=["mp4", "avi", "mov", "mkv", "webm"],
+                key="behavior_video_upload",
+            )
+            if behavior_upload is not None and st.button("Analyze uploaded video", key="analyze_uploaded_video"):
+                try:
+                    from tempfile import NamedTemporaryFile
+
+                    suffix = Path(behavior_upload.name).suffix or ".mp4"
+                    with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                        temp_file.write(behavior_upload.getbuffer())
+                        temp_path = temp_file.name
+                    with st.spinner("Analyzing video behavior..."):
+                        if detect_behavior_from_source is None:
+                            raise RuntimeError(
+                                "Behavior analyzer is unavailable. "
+                                "Place a pretrained behavior model checkpoint at artifacts/behavior_model.pt "
+                                "or set BEHAVIOR_MODEL_PATH in .env to your checkpoint file."
+                            )
+                        behavior_result = detect_behavior_from_source(
+                            temp_path,
+                            analysis_seconds=10,
+                            max_frames=64,
+                            max_clips=4,
+                        )
+                    # Map behavior to emotion for recommendations
+                    detected_emotion = BEHAVIOR_TO_EMOTION.get(behavior_result.label, "calm")
+                    st.success(
+                        f"Behavior: {behavior_result.label.title()} ({behavior_result.confidence:.2%}) → Mood: {detected_emotion.title()}"
+                    )
+                    st.json(behavior_result.scores)
+                    
+                    # Set detected mood to trigger recommendation flow (same as emotion detection)
+                    st.session_state["detected_mood"] = detected_emotion
+                    st.session_state["last_detected_emotion"] = detected_emotion
+                    # Clear old journey data to force recalculation with new mood
+                    st.session_state.pop("emotion_path", None)
+                    st.session_state.pop("current_playlist", None)
+                    st.session_state.pop("current_from", None)
+                    st.session_state.pop("current_to", None)
+                    st.session_state["current_transition_step"] = 0
+                    
+                    st.info(f"🎯 Behavior detected! Using **{detected_emotion.title()}** as your current mood for music recommendation.")
+                    st.rerun()
+                    
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+                except Exception as exc:
+                    st.error(f"Video analysis failed: {exc}")
+        else:
+            stream_url = st.text_input(
+                "RTSP / HTTP / CCTV stream URL",
+                key="behavior_stream_url",
+                placeholder="rtsp://user:pass@camera-ip:554/stream",
+            )
+            if stream_url and st.button("Analyze stream", key="analyze_stream_behavior"):
+                try:
+                    with st.spinner("Analyzing stream behavior..."):
+                        if detect_behavior_from_source is None:
+                            raise RuntimeError(
+                                "Behavior analyzer is unavailable. "
+                                "Place a pretrained behavior model checkpoint at artifacts/behavior_model.pt "
+                                "or set BEHAVIOR_MODEL_PATH in .env to your checkpoint file."
+                            )
+                        behavior_result = detect_behavior_from_source(
+                            stream_url,
+                            analysis_seconds=10,
+                            max_frames=64,
+                            max_clips=4,
+                        )
+                    # Map behavior to emotion for recommendations
+                    detected_emotion = BEHAVIOR_TO_EMOTION.get(behavior_result.label, "calm")
+                    st.success(
+                        f"Behavior: {behavior_result.label.title()} ({behavior_result.confidence:.2%}) → Mood: {detected_emotion.title()}"
+                    )
+                    st.json(behavior_result.scores)
+                    
+                    # Set detected mood to trigger recommendation flow (same as emotion detection)
+                    st.session_state["detected_mood"] = detected_emotion
+                    st.session_state["last_detected_emotion"] = detected_emotion
+                    # Clear old journey data to force recalculation with new mood
+                    st.session_state.pop("emotion_path", None)
+                    st.session_state.pop("current_playlist", None)
+                    st.session_state.pop("current_from", None)
+                    st.session_state.pop("current_to", None)
+                    st.session_state["current_transition_step"] = 0
+                    
+                    st.info(f"🎯 Behavior detected! Using **{detected_emotion.title()}** as your current mood for music recommendation.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Stream analysis failed: {exc}")
 
     detected = st.session_state.get("detected_mood")
     if detected:
