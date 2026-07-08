@@ -56,25 +56,49 @@ def analyze_frame(frame_bgr: np.ndarray) -> Optional[str]:
         return None
 
     try:
-        # Encode image to JPG bytes
-        _, buf = cv2.imencode('.jpg', frame_bgr)
-        files = {'image_file': ('frame.jpg', io.BytesIO(buf.tobytes()), 'image/jpeg')}
-        data = {
-            'api_key': FACEPP_API_KEY,
-            'api_secret': FACEPP_API_SECRET,
-            'return_attributes': 'emotion'
-        }
-        resp = requests.post(FACEPP_ENDPOINT, data=data, files=files, timeout=10)
-        if resp.status_code != 200:
-            _set_error(f"Face++ HTTP {resp.status_code}: {resp.text}")
-            return None
-        j = resp.json()
+        def _call_facepp(img_bgr: np.ndarray):
+            _, buf = cv2.imencode('.jpg', img_bgr)
+            files = {'image_file': ('frame.jpg', io.BytesIO(buf.tobytes()), 'image/jpeg')}
+            data = {
+                'api_key': FACEPP_API_KEY,
+                'api_secret': FACEPP_API_SECRET,
+                'return_attributes': 'emotion'
+            }
+            resp = requests.post(FACEPP_ENDPOINT, data=data, files=files, timeout=10)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Face++ HTTP {resp.status_code}: {resp.text}")
+            return resp.json()
+
+        # First attempt: send full image
+        j = _call_facepp(frame_bgr)
         faces = j.get('faces', [])
+
+        # If no faces detected, try a local face-crop using OpenCV Haar cascade and retry
+        if not faces:
+            try:
+                cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+                dets = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                if len(dets) > 0:
+                    # pick largest detected box and crop with padding
+                    x, y, w, h = max(dets, key=lambda r: r[2] * r[3])
+                    pad = int(0.25 * max(w, h))
+                    x0 = max(0, x - pad)
+                    y0 = max(0, y - pad)
+                    x1 = min(frame_bgr.shape[1], x + w + pad)
+                    y1 = min(frame_bgr.shape[0], y + h + pad)
+                    cropped = frame_bgr[y0:y1, x0:x1]
+                    j = _call_facepp(cropped)
+                    faces = j.get('faces', [])
+            except Exception:
+                pass
+
         if not faces:
             _set_error('Face++: no face detected')
             return None
+
         # Use largest face by bounding box area if multiple
-        best_face = max(faces, key=lambda f: (f.get('face_rectangle', {}).get('width',0) * f.get('face_rectangle', {}).get('height',0)))
+        best_face = max(faces, key=lambda f: (f.get('face_rectangle', {}).get('width', 0) * f.get('face_rectangle', {}).get('height', 0)))
         emotions = best_face.get('attributes', {}).get('emotion', {})
         if not emotions:
             _set_error('Face++: no emotion attributes')
