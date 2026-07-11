@@ -1093,32 +1093,55 @@ def render_new_session(profile: Dict[str, Any]) -> None:
         )
         return
 
-    start_col, manual_col = st.columns(2)
-    if start_col.button("Start with Webcam 📹"):
-        st.session_state["mode"] = "webcam"
-        st.session_state["detected_mood"] = None
-        st.session_state["last_detected_emotion"] = None
-        # Clear journey tracking for fresh start
-        st.session_state.pop("emotion_path", None)
-        st.session_state.pop("current_playlist", None)
-        st.session_state.pop("current_from", None)
-        st.session_state.pop("current_to", None)
-        st.session_state["current_transition_step"] = 0
-    if manual_col.button("Start with Manual Input 👆"):
-        st.session_state["mode"] = "manual"
-        st.session_state["detected_mood"] = None
-        st.session_state["last_detected_emotion"] = None
-        # Clear journey tracking for fresh start
-        st.session_state.pop("emotion_path", None)
-        st.session_state.pop("current_playlist", None)
-        st.session_state.pop("current_from", None)
-        st.session_state.pop("current_to", None)
-        st.session_state["current_transition_step"] = 0
-
+    # Check if emotion detection is available
+    detector_available = analyze_frame is not None
+    
+    # Auto-detect mode: if detector unavailable, force manual mode
     mode = st.session_state.get("mode")
+    if mode is None:
+        # First time: auto-select mode based on detector availability
+        mode = "manual" if not detector_available else None
+    
+    # If detector is unavailable and user hasn't already set manual mode, show notification and set it
+    if not detector_available and mode != "manual":
+        st.info(
+            "📌 **Emotion detection is currently unavailable on this deployment.** \n\n"
+            "No problem! The **Manual Input** mode works perfectly and gives the same high-quality recommendations. "
+            "Just select the child's mood manually."
+        )
+        mode = "manual"
+
+    if mode is None:
+        # Only show buttons if detector is available
+        start_col, manual_col = st.columns(2)
+        if start_col.button("Start with Webcam 📹"):
+            st.session_state["mode"] = "webcam"
+            st.session_state["detected_mood"] = None
+            st.session_state["last_detected_emotion"] = None
+            # Clear journey tracking for fresh start
+            st.session_state.pop("emotion_path", None)
+            st.session_state.pop("current_playlist", None)
+            st.session_state.pop("current_from", None)
+            st.session_state.pop("current_to", None)
+            st.session_state["current_transition_step"] = 0
+            st.rerun()
+        if manual_col.button("Start with Manual Input 👆"):
+            st.session_state["mode"] = "manual"
+            st.session_state["detected_mood"] = None
+            st.session_state["last_detected_emotion"] = None
+            # Clear journey tracking for fresh start
+            st.session_state.pop("emotion_path", None)
+            st.session_state.pop("current_playlist", None)
+            st.session_state.pop("current_from", None)
+            st.session_state.pop("current_to", None)
+            st.session_state["current_transition_step"] = 0
+            st.rerun()
 
     if mode == "manual":
-        st.subheader("Manual Mood Input")
+        if detector_available:
+            st.subheader("Manual Mood Input (Fallback)")
+        else:
+            st.subheader("Select Child's Current Mood")
         manual_mood = st.selectbox(
             "What is the child's current mood?",
             options=MOOD_OPTIONS,
@@ -1126,6 +1149,7 @@ def render_new_session(profile: Dict[str, Any]) -> None:
         )
         if st.button("Get Recommendation", key="manual_get_recommendation"):
             st.session_state["detected_mood"] = manual_mood
+            st.rerun()
     elif mode == "webcam":
         st.subheader("Webcam Mood Detection")
         
@@ -1297,22 +1321,13 @@ def render_new_session(profile: Dict[str, Any]) -> None:
                 )
 
             if not detector_available:
-                st.error(
-                    "⚠️ Emotion detection is currently unavailable. "
-                    "Please use **Manual Input** mode instead."
+                st.warning(
+                    "Emotion detection is not available in this deployment. "
+                    "Please return to the main menu and use **Manual Input** mode instead."
                 )
-                emotion_errors = [
-                    message for name, message in _dependency_errors if name == "emotion_detector"
-                ]
-                if emotion_errors:
-                    st.warning(f"Import error: `{emotion_errors[-1]}`")
-                elif _dependency_errors:
-                    with st.expander("Show dependency diagnostics"):
-                        for name, message in _dependency_errors:
-                            st.markdown(f"- `{name}`: {message}")
-                st.info(
-                    "💡 **Tip**: The manual mood input feature works perfectly and provides the same playlist recommendations!"
-                )
+                if st.button("Back to Main Menu"):
+                    st.session_state["mode"] = None
+                    st.rerun()
             else:
                 st.success("📸 **Snapshot Mode Active** - More stable than real-time video")
                 st.info(
