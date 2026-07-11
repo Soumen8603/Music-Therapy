@@ -99,9 +99,16 @@ try:
             print(f"[app.py] Local detector import failed: {e}")
             emotion_detector = None
 
-    emotion_detector = importlib.reload(emotion_detector)
-    analyze_frame = getattr(emotion_detector, "analyze_frame", None)
-    get_last_detection_error = getattr(emotion_detector, "get_last_detection_error", lambda: None)
+    # Only reload if successfully imported
+    if emotion_detector is not None:
+        emotion_detector = importlib.reload(emotion_detector)
+        analyze_frame = getattr(emotion_detector, "analyze_frame", None)
+        get_last_detection_error = getattr(emotion_detector, "get_last_detection_error", lambda: None)
+    else:
+        # No detector available
+        print("[app.py] ✗ No emotion detector available")
+        analyze_frame = None
+        get_last_detection_error = lambda: None
 except (ImportError, OSError, AttributeError) as exc:
     # OSError catches libGL.so.1 and other system library errors
     # This is common on Streamlit Cloud where system libraries are limited
