@@ -63,8 +63,7 @@ try:
     import importlib
     import os as _os
 
-    # Prefer Face++ when API keys are set (explicit config), then Hume (if USE_HUME=1),
-    # finally fall back to the local `emotion_detector` module.
+    # Prioritize Face++ (if API keys are set), then fall back to Hume or local detector
     emotion_detector = None
 
     _facepp_key = _os.getenv("FACEPP_API_KEY")
@@ -72,10 +71,10 @@ try:
     if _facepp_key and _facepp_secret:
         try:
             import emotion_detector_facepp as ed_facepp
-
             emotion_detector = ed_facepp
-        except Exception:
-            # keep trying other detectors
+            print("[app.py] ✓ Using Face++ for emotion detection")
+        except Exception as e:
+            print(f"[app.py] Face++ import failed: {e}")
             emotion_detector = None
 
     # If Face++ not configured, try Hume (if enabled)
@@ -84,16 +83,21 @@ try:
             _use_hume = _os.getenv("USE_HUME", "0") == "1"
             if _use_hume:
                 import emotion_detector_fixed as ed_fixed
-
                 emotion_detector = ed_fixed
-        except Exception:
+                print("[app.py] ✓ Using Hume API for emotion detection")
+        except Exception as e:
+            print(f"[app.py] Hume import failed: {e}")
             emotion_detector = None
 
     # Final fallback: local DeepFace-based detector (may be heavy)
     if emotion_detector is None:
-        import emotion_detector as ed_default
-
-        emotion_detector = ed_default
+        try:
+            import emotion_detector as ed_default
+            emotion_detector = ed_default
+            print("[app.py] ✓ Using local emotion detector")
+        except Exception as e:
+            print(f"[app.py] Local detector import failed: {e}")
+            emotion_detector = None
 
     emotion_detector = importlib.reload(emotion_detector)
     analyze_frame = getattr(emotion_detector, "analyze_frame", None)
