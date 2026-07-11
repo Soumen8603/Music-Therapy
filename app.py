@@ -1107,46 +1107,52 @@ def render_new_session(profile: Dict[str, Any]) -> None:
     # Check if emotion detection is available
     detector_available = analyze_frame is not None
     
+    # Debug info for the user
+    with st.expander("🔧 System Status", expanded=False):
+        if detector_available:
+            st.success("✅ Emotion detection is AVAILABLE - Webcam mode enabled")
+        else:
+            st.warning("⚠️ Emotion detection is NOT available - Manual mode recommended")
+    
     # Auto-detect mode: if detector unavailable, force manual mode
     mode = st.session_state.get("mode")
     if mode is None:
         # First time: auto-select mode based on detector availability
         mode = "manual" if not detector_available else None
     
-    # If detector is unavailable and user hasn't already set manual mode, show notification and set it
-    if not detector_available and mode != "manual":
-        st.info(
-            "📌 **Emotion detection is currently unavailable on this deployment.** \n\n"
-            "No problem! The **Manual Input** mode works perfectly and gives the same high-quality recommendations. "
-            "Just select the child's mood manually."
-        )
-        mode = "manual"
-
+    # Always show both buttons for user choice
     if mode is None:
-        # Only show buttons if detector is available
-        start_col, manual_col = st.columns(2)
-        if start_col.button("Start with Webcam 📹"):
-            st.session_state["mode"] = "webcam"
-            st.session_state["detected_mood"] = None
-            st.session_state["last_detected_emotion"] = None
-            # Clear journey tracking for fresh start
-            st.session_state.pop("emotion_path", None)
-            st.session_state.pop("current_playlist", None)
-            st.session_state.pop("current_from", None)
-            st.session_state.pop("current_to", None)
-            st.session_state["current_transition_step"] = 0
-            st.rerun()
-        if manual_col.button("Start with Manual Input 👆"):
-            st.session_state["mode"] = "manual"
-            st.session_state["detected_mood"] = None
-            st.session_state["last_detected_emotion"] = None
-            # Clear journey tracking for fresh start
-            st.session_state.pop("emotion_path", None)
-            st.session_state.pop("current_playlist", None)
-            st.session_state.pop("current_from", None)
-            st.session_state.pop("current_to", None)
-            st.session_state["current_transition_step"] = 0
-            st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if detector_available:
+                st.success("📹 Webcam Available")
+            else:
+                st.warning("📹 Webcam (May not work)")
+            if st.button("Start with Webcam 📹", key="btn_webcam"):
+                st.session_state["mode"] = "webcam"
+                st.session_state["detected_mood"] = None
+                st.session_state["last_detected_emotion"] = None
+                # Clear journey tracking for fresh start
+                st.session_state.pop("emotion_path", None)
+                st.session_state.pop("current_playlist", None)
+                st.session_state.pop("current_from", None)
+                st.session_state.pop("current_to", None)
+                st.session_state["current_transition_step"] = 0
+                st.rerun()
+        
+        with col2:
+            st.success("👆 Manual Input")
+            if st.button("Start with Manual Input 👆", key="btn_manual"):
+                st.session_state["mode"] = "manual"
+                st.session_state["detected_mood"] = None
+                st.session_state["last_detected_emotion"] = None
+                # Clear journey tracking for fresh start
+                st.session_state.pop("emotion_path", None)
+                st.session_state.pop("current_playlist", None)
+                st.session_state.pop("current_from", None)
+                st.session_state.pop("current_to", None)
+                st.session_state["current_transition_step"] = 0
+                st.rerun()
 
     if mode == "manual":
         if detector_available:

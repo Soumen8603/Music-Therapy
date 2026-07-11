@@ -15,8 +15,15 @@ from typing import Optional
 
 _LAST_ERROR: Optional[str] = None
 
-FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "")
-FACEPP_API_SECRET = os.getenv("FACEPP_API_SECRET", "")
+# Try to read from Streamlit Secrets first, then fall back to environment variables
+try:
+    import streamlit as st
+    FACEPP_API_KEY = st.secrets.get("FACEPP_API_KEY", "") or os.getenv("FACEPP_API_KEY", "")
+    FACEPP_API_SECRET = st.secrets.get("FACEPP_API_SECRET", "") or os.getenv("FACEPP_API_SECRET", "")
+except:
+    FACEPP_API_KEY = os.getenv("FACEPP_API_KEY", "")
+    FACEPP_API_SECRET = os.getenv("FACEPP_API_SECRET", "")
+
 FACEPP_ENDPOINT = os.getenv("FACEPP_ENDPOINT", "https://api-us.faceplusplus.com/facepp/v3/detect")
 
 def get_last_detection_error() -> Optional[str]:
