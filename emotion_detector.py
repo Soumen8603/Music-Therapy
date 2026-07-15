@@ -20,6 +20,17 @@ try:
 except Exception:
     TRANSFORMERS_AVAILABLE = False
 
+# Try to import Face++ API detector (cloud-compatible)
+FACEPP_AVAILABLE = False
+FACEPP_ERROR = None
+try:
+    from emotion_detector_facepp import analyze_frame as facepp_analyze_frame
+    FACEPP_AVAILABLE = True
+    print("[emotion_detector] Face++ API detector available [OK]")
+except ImportError as e:
+    FACEPP_ERROR = str(e)
+    print(f"[emotion_detector] Face++ detector not available: {e}")
+
 load_dotenv()
 
 EMOTION_CONFIDENCE_THRESHOLD = float(os.getenv("EMOTION_CONFIDENCE_THRESHOLD", "0.35"))
@@ -239,9 +250,11 @@ def analyze_frame(frame_bgr: np.ndarray) -> Optional[str]:
         None: If no face detected or error occurred
     
     Priority:
-        1. DeepFace (recommended, real-time capable)
-        2. Local emotion model (fallback)
-        3. OpenCV cascade (last resort)
+        1. Face++ API (cloud-compatible, works on Streamlit Cloud)
+        2. Pretrained Hugging Face model (high-confidence only)
+        3. DeepFace (recommended, real-time capable)
+        4. Local emotion model (fallback)
+        5. OpenCV cascade (last resort)
     """
     global _LAST_ERROR
     _LAST_ERROR = None
@@ -252,7 +265,16 @@ def analyze_frame(frame_bgr: np.ndarray) -> Optional[str]:
 
     frame_bgr = _prepare_frame_for_inference(frame_bgr)
 
-    # First, try the stronger pretrained Hugging Face model if available.
+    # PRIORITY 1: Try Face++ API first (cloud-compatible, works on Streamlit Cloud)
+    if FACEPP_AVAILABLE:
+        try:
+            emotion = facepp_analyze_frame(frame_bgr)
+            if emotion:
+                return emotion
+        except Exception as e:
+            print(f"[emotion_detector] Face++ analysis failed: {e}")
+
+    # PRIORITY 2: Use the stronger pretrained Hugging Face model if available.
     if PRETRAINED_MODEL_AVAILABLE:
         # Use the Hugging Face model only for high-confidence face emotions.
         # This keeps pretrained inference as a boost, while letting DeepFace handle
@@ -265,19 +287,19 @@ def analyze_frame(frame_bgr: np.ndarray) -> Optional[str]:
         if emotion:
             return emotion
 
-    # Then use DeepFace for real-time capable detection.
+    # PRIORITY 3: Then use DeepFace for real-time capable detection.
     if DEEPFACE_AVAILABLE:
         emotion = _analyze_deepface(frame_bgr)
         if emotion:
             return emotion
 
-    # Fallback to local model
+    # PRIORITY 4: Fallback to local model
     if LOCAL_MODEL_AVAILABLE:
         emotion = _analyze_local_model(frame_bgr)
         if emotion:
             return emotion
     
-    # Last resort: OpenCV
+    # PRIORITY 5: Last resort: OpenCV
     emotion = _analyze_opencv(frame_bgr)
     return emotion
 
